@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">PushScreen</string>
+    <string name="user_cancelled">用户取消</string>
+    <string name="label_permissions">Please enable Microphone and Storage permissions.</string>
+</resources>

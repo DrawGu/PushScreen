@@ -38,3 +38,6 @@ captures/
 *.iml
 .idea
 
+.DS_Store
+
+.externalNativeBuild
