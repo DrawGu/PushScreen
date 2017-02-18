@@ -44,6 +44,8 @@ public class CaptureService extends Service {
 
     private ScreenRecordWorker mScreenRecordWorker;
 
+    private AudioRecordWorker mAudioRecordWorker;
+
     static {
         ORIENTATIONS.append(Surface.ROTATION_0, 90);
         ORIENTATIONS.append(Surface.ROTATION_90, 0);
@@ -52,6 +54,7 @@ public class CaptureService extends Service {
     }
 
     private Binder mBinder = new LocalBinder();
+    private MediaMuxerWorker mMediaMuxerWorker;
 
     @Nullable
     @Override
@@ -107,10 +110,15 @@ public class CaptureService extends Service {
     public void startRecord() {
         if (mMediaProjection != null) {
             mScreenRecordWorker = new ScreenRecordWorker();
-            mScreenRecordWorker.init(mScreenWidth, mScreenHeight, 600000,mDensity, mMediaProjection,
-                    Environment.getExternalStorageDirectory() + "/Download/" + "record-"
-                            + DateTimeFormat.forPattern("MM-dd-HH:mm:ss").print(System.currentTimeMillis()) + ".mp4");
-            mScreenRecordWorker.start();
+            String path = Environment.getExternalStorageDirectory() + "/Download/" + "record-"
+                    + DateTimeFormat.forPattern("MM-dd-HH:mm:ss").print(System.currentTimeMillis()) + ".mp4";
+            mMediaMuxerWorker = new MediaMuxerWorker(path);
+            mScreenRecordWorker.init(mScreenWidth, mScreenHeight, 600000, mDensity,
+                    mMediaProjection, mMediaMuxerWorker);
+            mAudioRecordWorker = new AudioRecordWorker(mMediaMuxerWorker);
+            new Thread(mAudioRecordWorker).start();
+            new Thread(mScreenRecordWorker).start();
+
             mRecording = true;
         }
     }
@@ -118,9 +126,11 @@ public class CaptureService extends Service {
     public void stopRecording() {
         mRecording = false;
         mScreenRecordWorker.quit();
+        mAudioRecordWorker.quit();
         if (mVirtualDisplay != null) {
             mVirtualDisplay.release();
         }
+        mMediaMuxerWorker.stop();
         destroyMediaProjection();
     }
 
@@ -138,6 +148,7 @@ public class CaptureService extends Service {
         @Override
         public void onStop() {
             mScreenRecordWorker.quit();
+            mAudioRecordWorker.quit();
             mMediaProjection = null;
             mVirtualDisplay.release();
             destroyMediaProjection();

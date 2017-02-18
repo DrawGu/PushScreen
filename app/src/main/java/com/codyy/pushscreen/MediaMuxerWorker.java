@@ -4,6 +4,7 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import android.support.annotation.IntDef;
+import android.util.Log;
 
 import java.io.IOException;
 import java.lang.annotation.Retention;
@@ -16,6 +17,8 @@ import java.nio.ByteBuffer;
 
 public class MediaMuxerWorker {
 
+    private final static String TAG = "MediaMuxerWorker";
+
     public final static int TYPE_AUDIO = 0;
 
     public final static int TYPE_VIDEO = 1;
@@ -26,17 +29,26 @@ public class MediaMuxerWorker {
 
     private int mAudioTrackIndex = -1;
 
-    private boolean mMuxing;
+    private volatile boolean mMuxing;
 
     private final Object mLock = new Object();
 
-    public MediaMuxerWorker(String path) throws IOException {
-        mMediaMuxer = new MediaMuxer(path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+    private String mPath;
+
+    public MediaMuxerWorker(String path) {
+        this.mPath = path;
+    }
+
+    public void stop() {
+        mMediaMuxer.stop();
+        mMuxing = false;
     }
 
     public void addTrack(@TrackType int trackType, MediaFormat mediaFormat) {
         synchronized (mLock) {
             if (mMuxing) return;
+            createMuxer();
+            Log.d(TAG, "addTrack trackType=" + trackType + ",mediaFormat=" + mediaFormat.getString(MediaFormat.KEY_MIME));
             if (trackType == TYPE_AUDIO) {
                 mAudioTrackIndex = mMediaMuxer.addTrack(mediaFormat);
             } else if (trackType == TYPE_VIDEO) {
@@ -44,6 +56,17 @@ public class MediaMuxerWorker {
             }
             if (mVideoTrackIndex != -1 && mAudioTrackIndex != -1) {//音轨视轨都已添加
                 mMediaMuxer.start();
+                mMuxing = true;
+            }
+        }
+    }
+
+    private void createMuxer() {
+        if (mMediaMuxer == null) {
+            try {
+                mMediaMuxer = new MediaMuxer(mPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            } catch (IOException e) {
+                e.printStackTrace();
             }
         }
     }
@@ -58,6 +81,7 @@ public class MediaMuxerWorker {
             } else {
                 trackId = mAudioTrackIndex;
             }
+            Log.d(TAG, "writeSampleData trackType=" + trackType + ",bufferInfo=" + bufferInfo);
             mMediaMuxer.writeSampleData(trackId, byteBuffer, bufferInfo);
         }
     }

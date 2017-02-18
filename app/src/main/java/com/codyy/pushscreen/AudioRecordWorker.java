@@ -22,7 +22,7 @@ public class AudioRecordWorker implements Runnable {
 
     private static final String MIME_TYPE = "audio/mp4a-latm";
     private static final int SAMPLE_RATE = 44100;	// 44.1[KHz] is only setting guaranteed to be available on all devices.
-    private static final int BIT_RATE = 64000;
+    private static final int BIT_RATE = 32 * 1024;
     public static final int SAMPLES_PER_FRAME = 1024;	// AAC, bytes/frame/channel
     public static final int FRAMES_PER_BUFFER = 25; 	// AAC, frame/buffer/sec
 
@@ -34,18 +34,19 @@ public class AudioRecordWorker implements Runnable {
 
     private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
 
-    private AudioRecordWorker() {
-        initCodec();
-        initAudioRecord();
+    private MediaMuxerWorker mMediaMuxerWorker;
+
+    public AudioRecordWorker(MediaMuxerWorker mediaMuxerWorker) {
+        this.mMediaMuxerWorker = mediaMuxerWorker;
     }
 
     private void initCodec() {
         MediaFormat audioFormat = new MediaFormat();
-        audioFormat.setString(MediaFormat.KEY_MIME, "audio/mp4a-latm");
+        audioFormat.setString(MediaFormat.KEY_MIME, MIME_TYPE);
         audioFormat.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
-        audioFormat.setInteger(MediaFormat.KEY_SAMPLE_RATE, 44100);
+        audioFormat.setInteger(MediaFormat.KEY_SAMPLE_RATE, SAMPLE_RATE);
         audioFormat.setInteger(MediaFormat.KEY_CHANNEL_COUNT, 1);
-        audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, 32 * 1024);
+        audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE);
         audioFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 8820);
         Log.d(TAG, "creatingAudioEncoder,format=" + audioFormat.toString());
         try {
@@ -54,27 +55,26 @@ public class AudioRecordWorker implements Runnable {
             Log.e(TAG, "can`t create audioEncoder!", e);
         }
         mAudioCodec.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-    }
-
-    private void initAudioRecord() {
-    }
-
-    public void collectAndEncode() {
         mAudioCodec.start();
+        new AudioThread().start();
     }
 
     @Override
     public void run() {
-        MediaFormat outputFormat = mAudioCodec.getOutputFormat();
+        initCodec();
         while (!mQuit) {
             int outputBufferId = mAudioCodec.dequeueOutputBuffer(mBufferInfo, TIMEOUT_USEC);
             if (outputBufferId >=0) {
                 ByteBuffer outputBuffer = mAudioCodec.getOutputBuffer(outputBufferId);
-                // TODO: 2017/2/18
+                Log.d(TAG, "got buffer, info: size=" + mBufferInfo.size
+                        + ", presentationTimeUs=" + mBufferInfo.presentationTimeUs
+                        + ", offset=" + mBufferInfo.offset);
+                mMediaMuxerWorker.writeSampleData(MediaMuxerWorker.TYPE_AUDIO, outputBuffer, mBufferInfo);
                 mAudioCodec.releaseOutputBuffer(outputBufferId, false);
             } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                outputFormat = mAudioCodec.getOutputFormat();
-            } else {
+                MediaFormat outputFormat = mAudioCodec.getOutputFormat();
+                mMediaMuxerWorker.addTrack(MediaMuxerWorker.TYPE_AUDIO, outputFormat);
+            } else if (outputBufferId == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 try {
                     TimeUnit.MICROSECONDS.sleep(10);
                 } catch (InterruptedException e) {
