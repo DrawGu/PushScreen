@@ -1,4 +1,4 @@
-package com.codyy.pushscreen;
+package com.codyy.pushscreen.media;
 
 /**
  * Created by lake on 16-5-24.

@@ -3,9 +3,7 @@ package com.codyy.pushscreen;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
-import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Binder;
@@ -15,11 +13,9 @@ import android.support.annotation.Nullable;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.SparseIntArray;
-import android.view.Display;
 import android.view.Surface;
-import android.view.WindowManager;
 
-import java.io.IOException;
+import org.joda.time.format.DateTimeFormat;
 
 import static android.content.ContentValues.TAG;
 
@@ -36,8 +32,6 @@ public class CaptureService extends Service {
 
     private MediaProjection mMediaProjection;
 
-    private MediaRecorder mMediaRecorder;
-
     private VirtualDisplay mVirtualDisplay;
 
     private int mScreenWidth;
@@ -47,6 +41,8 @@ public class CaptureService extends Service {
     private int mDensity;
 
     private boolean mRecording;
+
+    private ScreenRecordWorker mScreenRecordWorker;
 
     static {
         ORIENTATIONS.append(Surface.ROTATION_0, 90);
@@ -69,7 +65,6 @@ public class CaptureService extends Service {
         mMediaProjectionManager = (MediaProjectionManager)
                 getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         obtainScreenSize();
-        mMediaRecorder = new MediaRecorder();
     }
 
     /**
@@ -97,33 +92,32 @@ public class CaptureService extends Service {
         return null;
     }
 
-    private void createVirtualDisplay() {
-        mVirtualDisplay = mMediaProjection.createVirtualDisplay("gg",
-                mScreenWidth, mScreenHeight, mDensity,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, mMediaRecorder.getSurface(),
-                null, null);
-    }
+//    private void createVirtualDisplay() {
+//        mVirtualDisplay = mMediaProjection.createVirtualDisplay("gg",
+//                mScreenWidth, mScreenHeight, mDensity,
+//                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, mMediaRecorder.getSurface(),
+//                null, null);
+//    }
 
     public void setUpMediaProjection(int resultCode, Intent resultData) {
         mMediaProjection = mMediaProjectionManager.getMediaProjection(resultCode, resultData);
         mMediaProjection.registerCallback(mMediaProjectionCallback, null);
     }
 
-    public boolean startRecord() {
-        initRecorder();
-        createVirtualDisplay();
+    public void startRecord() {
         if (mMediaProjection != null) {
+            mScreenRecordWorker = new ScreenRecordWorker();
+            mScreenRecordWorker.init(mScreenWidth, mScreenHeight, 600000,mDensity, mMediaProjection,
+                    Environment.getExternalStorageDirectory() + "/Download/" + "record-"
+                            + DateTimeFormat.forPattern("MM-dd-HH:mm:ss").print(System.currentTimeMillis()) + ".mp4");
+            mScreenRecordWorker.start();
             mRecording = true;
-            createVirtualDisplay();
-            mMediaRecorder.start();
         }
-        return true;
     }
 
     public void stopRecording() {
         mRecording = false;
-        mMediaRecorder.stop();
-        mMediaRecorder.reset();
+        mScreenRecordWorker.quit();
         if (mVirtualDisplay != null) {
             mVirtualDisplay.release();
         }
@@ -143,37 +137,12 @@ public class CaptureService extends Service {
     private MediaProjection.Callback mMediaProjectionCallback = new MediaProjection.Callback() {
         @Override
         public void onStop() {
-            mMediaRecorder.stop();
-            mMediaRecorder.reset();
+            mScreenRecordWorker.quit();
             mMediaProjection = null;
             mVirtualDisplay.release();
             destroyMediaProjection();
         }
     };
-
-    public void initRecorder() {
-        mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-        mMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
-        mMediaRecorder.setOutputFile(Environment
-                .getExternalStoragePublicDirectory(Environment
-                        .DIRECTORY_DOWNLOADS) + "/video.mp4");
-        mMediaRecorder.setVideoSize(mScreenWidth, mScreenHeight);
-        mMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
-        mMediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
-        mMediaRecorder.setVideoEncodingBitRate(1000 * 1000);
-        mMediaRecorder.setVideoFrameRate(30);
-        WindowManager window = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        Display display = window.getDefaultDisplay();
-        int rotation = display.getRotation();
-        int orientation = ORIENTATIONS.get(rotation + 90);
-        mMediaRecorder.setOrientationHint(orientation);
-        try {
-            mMediaRecorder.prepare();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
 
     private void destroyMediaProjection() {
         if (mMediaProjection != null) {

@@ -1,4 +1,4 @@
-package com.codyy.pushscreen;
+package com.codyy.pushscreen.media;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
