@@ -95,13 +95,6 @@ public class CaptureService extends Service {
         return null;
     }
 
-//    private void createVirtualDisplay() {
-//        mVirtualDisplay = mMediaProjection.createVirtualDisplay("gg",
-//                mScreenWidth, mScreenHeight, mDensity,
-//                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, mMediaRecorder.getSurface(),
-//                null, null);
-//    }
-
     public void setUpMediaProjection(int resultCode, Intent resultData) {
         mMediaProjection = mMediaProjectionManager.getMediaProjection(resultCode, resultData);
         mMediaProjection.registerCallback(mMediaProjectionCallback, null);
@@ -109,16 +102,18 @@ public class CaptureService extends Service {
 
     public void startRecord() {
         if (mMediaProjection != null) {
-            mScreenRecordWorker = new ScreenRecordWorker();
             String path = Environment.getExternalStorageDirectory() + "/Download/" + "record-"
                     + DateTimeFormat.forPattern("MM-dd-HH:mm:ss").print(System.currentTimeMillis()) + ".mp4";
             mMediaMuxerWorker = new MediaMuxerWorker(path);
+
+
+            mAudioRecordWorker = new AudioRecordWorker(mMediaMuxerWorker);
+            mScreenRecordWorker = new ScreenRecordWorker();
             mScreenRecordWorker.init(mScreenWidth, mScreenHeight, 600000, mDensity,
                     mMediaProjection, mMediaMuxerWorker);
-            mAudioRecordWorker = new AudioRecordWorker(mMediaMuxerWorker);
+
             new Thread(mAudioRecordWorker).start();
             new Thread(mScreenRecordWorker).start();
-
             mRecording = true;
         }
     }
