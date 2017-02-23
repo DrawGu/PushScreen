@@ -3,11 +3,12 @@ package com.codyy.pushscreen;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.hardware.display.VirtualDisplay;
+import android.media.AudioFormat;
+import android.media.MediaCodecInfo;
+import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Binder;
-import android.os.Environment;
 import android.os.IBinder;
 import android.support.annotation.Nullable;
 import android.util.DisplayMetrics;
@@ -15,7 +16,10 @@ import android.util.Log;
 import android.util.SparseIntArray;
 import android.view.Surface;
 
-import org.joda.time.format.DateTimeFormat;
+import com.codyy.pushscreen.media.RESCoreParameters;
+import com.codyy.pushscreen.media.RESFlvData;
+import com.codyy.pushscreen.media.RESFlvDataCollecter;
+import com.codyy.pushscreen.rtmp.RESRtmpSender;
 
 import static android.content.ContentValues.TAG;
 
@@ -32,8 +36,6 @@ public class CaptureService extends Service {
 
     private MediaProjection mMediaProjection;
 
-    private VirtualDisplay mVirtualDisplay;
-
     private int mScreenWidth;
 
     private int mScreenHeight;
@@ -42,9 +44,15 @@ public class CaptureService extends Service {
 
     private boolean mRecording;
 
+    private RESCoreParameters mRtmpParams;
+
+    private RESRtmpSender mRtmpSender;
+
     private ScreenRecordWorker mScreenRecordWorker;
 
     private AudioRecordWorker mAudioRecordWorker;
+
+    private RESFlvDataCollecter mDataCollecter;
 
     static {
         ORIENTATIONS.append(Surface.ROTATION_0, 90);
@@ -54,7 +62,6 @@ public class CaptureService extends Service {
     }
 
     private Binder mBinder = new LocalBinder();
-    private MediaMuxerWorker mMediaMuxerWorker;
 
     @Nullable
     @Override
@@ -65,6 +72,26 @@ public class CaptureService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        mRtmpParams = new RESCoreParameters();
+        mRtmpParams.rtmpAddr = "rtmp://10.5.51.11/dms/yonglic";
+        mRtmpParams.printDetailMsg = true;
+        mRtmpParams.senderQueueLength = 150;
+        mRtmpParams.mediacodecAVCBitRate = 750 * 1024;
+        mRtmpParams.mediacodecAVCFrameRate = 20;
+
+        mRtmpParams.mediacodecAACBitRate = 32 * 1024;
+        mRtmpParams.mediacodecAACChannelCount = 1;
+        mRtmpParams.mediacodecAACProfile = MediaCodecInfo.CodecProfileLevel.AACObjectLC;
+        mRtmpParams.mediacodecAACSampleRate = 44100;
+        mRtmpParams.mediacodecAACMaxInputSize = 8820;
+
+        mRtmpParams.audioRecoderSource = MediaRecorder.AudioSource.MIC;
+        mRtmpParams.audioRecoderChannelConfig = AudioFormat.CHANNEL_IN_MONO;
+        mRtmpParams.audioRecoderSampleRate = mRtmpParams.mediacodecAACSampleRate;
+        mRtmpParams.audioRecoderFormat = AudioFormat.ENCODING_PCM_16BIT;
+        mRtmpParams.audioRecoderSliceSize = mRtmpParams.mediacodecAACSampleRate / 10;
+        mRtmpParams.audioRecoderBufferSize = mRtmpParams.audioRecoderSliceSize * 2;
+
         mMediaProjectionManager = (MediaProjectionManager)
                 getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         obtainScreenSize();
@@ -75,8 +102,8 @@ public class CaptureService extends Service {
      */
     private void obtainScreenSize() {
         DisplayMetrics metrics = getApplicationContext().getResources().getDisplayMetrics();
-        mScreenWidth = metrics.widthPixels / 2;
-        mScreenHeight = metrics.heightPixels / 2;
+        mRtmpParams.videoWidth = metrics.widthPixels / 2;
+        mRtmpParams.videoHeight = metrics.heightPixels / 2;
         mDensity = metrics.densityDpi;
     }
 
@@ -102,15 +129,24 @@ public class CaptureService extends Service {
 
     public void startRecord() {
         if (mMediaProjection != null) {
-            String path = Environment.getExternalStorageDirectory() + "/Download/" + "record-"
-                    + DateTimeFormat.forPattern("MM-dd-HH:mm:ss").print(System.currentTimeMillis()) + ".mp4";
-            mMediaMuxerWorker = new MediaMuxerWorker(path);
+//            String path = Environment.getExternalStorageDirectory() + "/Download/" + "record-"
+//                    + DateTimeFormat.forPattern("MM-dd-HH:mm:ss").print(System.currentTimeMillis()) + ".mp4";
+//            mMediaMuxerWorker = new MediaMuxerWorker(path);
 
+            mRtmpSender = new RESRtmpSender();
+            mRtmpSender.prepare( mRtmpParams);
+            mDataCollecter = new RESFlvDataCollecter() {
+                @Override
+                public void collect(RESFlvData flvData, int type) {
+                    mRtmpSender.feed(flvData, type);
+                }
+            };
+            mRtmpSender.start(mRtmpParams.rtmpAddr);
 
-            mAudioRecordWorker = new AudioRecordWorker(mMediaMuxerWorker);
+            mAudioRecordWorker = new AudioRecordWorker(mRtmpParams, mDataCollecter);
             mScreenRecordWorker = new ScreenRecordWorker();
-            mScreenRecordWorker.init(mScreenWidth, mScreenHeight, 600000, mDensity,
-                    mMediaProjection, mMediaMuxerWorker);
+            mScreenRecordWorker.init(mRtmpParams, mDensity,
+                    mMediaProjection, mDataCollecter);
 
             new Thread(mAudioRecordWorker).start();
             new Thread(mScreenRecordWorker).start();
@@ -122,11 +158,12 @@ public class CaptureService extends Service {
         mRecording = false;
         mScreenRecordWorker.quit();
         mAudioRecordWorker.quit();
-        if (mVirtualDisplay != null) {
-            mVirtualDisplay.release();
-        }
-        mMediaMuxerWorker.stop();
+//        mMediaMuxerWorker.stop();
         destroyMediaProjection();
+        if (mRtmpSender != null) {
+            mRtmpSender.stop();
+            mRtmpSender.destroy();
+        }
     }
 
     public boolean isRecording() {
@@ -145,7 +182,6 @@ public class CaptureService extends Service {
             mScreenRecordWorker.quit();
             mAudioRecordWorker.quit();
             mMediaProjection = null;
-            mVirtualDisplay.release();
             destroyMediaProjection();
         }
     };

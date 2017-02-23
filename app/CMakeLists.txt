@@ -4,13 +4,34 @@
 
 cmake_minimum_required(VERSION 3.4.1)
 
+include_directories(src/main/cpp/rtmp/librtmp)
+
+set( MY_CPP_LIST
+     src/main/cpp/rtmp/libresrtmp.c
+     src/main/cpp/rtmp/libresrtmp.h
+     src/main/cpp/rtmp/log.h
+     src/main/cpp/rtmp/librtmp/amf.c
+     src/main/cpp/rtmp/librtmp/amf.h
+     src/main/cpp/rtmp/librtmp/bytes.h
+     src/main/cpp/rtmp/librtmp/dh.h
+     src/main/cpp/rtmp/librtmp/dhgroups.h
+     src/main/cpp/rtmp/librtmp/handshake.h
+     src/main/cpp/rtmp/librtmp/hashswf.c
+     src/main/cpp/rtmp/librtmp/http.h
+     src/main/cpp/rtmp/librtmp/log.c
+     src/main/cpp/rtmp/librtmp/log.h
+     src/main/cpp/rtmp/librtmp/parseurl.c
+     src/main/cpp/rtmp/librtmp/rtmp.c
+     src/main/cpp/rtmp/librtmp/rtmp.h
+     src/main/cpp/rtmp/librtmp/rtmp_sys.h)
+
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.
 # You can define multiple libraries, and CMake builds it for you.
 # Gradle automatically packages shared libraries with your APK.
 
 add_library( # Sets the name of the library.
-             native-lib
+             resrtmp
 
              # Sets the library as a shared library.
              SHARED
@@ -18,7 +39,7 @@ add_library( # Sets the name of the library.
              # Provides a relative path to your source file(s).
              # Associated headers in the same location as their source
              # file are automatically included.
-             src/main/cpp/native-lib.cpp )
+             ${MY_CPP_LIST} )
 
 # Searches for a specified prebuilt library and stores the path as a
 # variable. Because system libraries are included in the search path by
@@ -38,7 +59,7 @@ find_library( # Sets the name of the path variable.
 # build script, prebuilt third-party libraries, or system libraries.
 
 target_link_libraries( # Specifies the target library.
-                       native-lib
+                       resrtmp
 
                        # Links the target library to the log library
                        # included in the NDK.

@@ -25,6 +25,12 @@ import android.media.projection.MediaProjection;
 import android.util.Log;
 import android.view.Surface;
 
+import com.codyy.pushscreen.media.Packager;
+import com.codyy.pushscreen.media.RESCoreParameters;
+import com.codyy.pushscreen.media.RESFlvData;
+import com.codyy.pushscreen.media.RESFlvDataCollecter;
+import com.codyy.pushscreen.rtmp.RESRtmpSender;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
@@ -38,28 +44,36 @@ public class ScreenRecordWorker implements Runnable {
     private int mHeight;
     private int mBitRate;
     private int mDpi;
-    private MediaMuxerWorker mMediaMuxerWorker;
     private MediaProjection mMediaProjection;
     // parameters for the encoder
     private static final String MIME_TYPE = "video/avc"; // H.264 Advanced Video Coding
-    private static final int FRAME_RATE = 30; // 30 fps
     private static final int IFRAME_INTERVAL = 10; // 10 seconds between I-frames
     private static final int TIMEOUT_US = 10000;
 
     private MediaCodec mEncoder;
+
     private volatile boolean mQuit = false;
+
     private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
+
     private VirtualDisplay mVirtualDisplay;
+
+    private RESFlvDataCollecter mDataCollecter;
+
+    private int mFrameRate;
+
+    private long startTime = 0;
 
     public ScreenRecordWorker() { }
 
-    public void init(int width, int height, int bitRate, int dpi, MediaProjection mp, MediaMuxerWorker mediaMuxerWorker) {
-        this.mWidth = width;
-        this.mHeight = height;
-        this.mBitRate = bitRate;
+    public void init(RESCoreParameters params, int dpi, MediaProjection mp, RESFlvDataCollecter dataCollecter) {
+        this.mWidth = params.videoWidth;
+        this.mHeight = params.videoHeight;
+        this.mBitRate = params.mediacodecAVCBitRate;
+        this.mFrameRate = params.mediacodecAVCFrameRate;
         this.mDpi = dpi;
         this.mMediaProjection = mp;
-        this.mMediaMuxerWorker = mediaMuxerWorker;
+        this.mDataCollecter = dataCollecter;
     }
 
     /**
@@ -96,7 +110,9 @@ public class ScreenRecordWorker implements Runnable {
             if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 outputFormat = mEncoder.getOutputFormat();
                 Log.i(TAG, "output format changed.\n new format: " + outputFormat.toString());
-                mMediaMuxerWorker.addTrack(MediaMuxerWorker.TYPE_VIDEO, outputFormat);
+                if (mDataCollecter != null) {
+                    sendAVCDecoderConfigurationRecord(0, mEncoder.getOutputFormat());
+                }
             } else if (outputBufferId == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 Log.d(TAG, "retrieving buffers time out!");
                 try {
@@ -106,6 +122,10 @@ public class ScreenRecordWorker implements Runnable {
                     e.printStackTrace();
                 }
             } else if (outputBufferId >= 0) {
+                if (startTime == 0) {
+                    startTime = mBufferInfo.presentationTimeUs / 1000;
+                }
+
                 ByteBuffer outputBuffer = mEncoder.getOutputBuffer(outputBufferId);
 
                 if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
@@ -121,7 +141,12 @@ public class ScreenRecordWorker implements Runnable {
                             + ", offset=" + mBufferInfo.offset);
 //                    outputBuffer.position(mBufferInfo.offset);
 //                    outputBuffer.limit(mBufferInfo.offset + mBufferInfo.size);
-                    mMediaMuxerWorker.writeSampleData(MediaMuxerWorker.TYPE_VIDEO, outputBuffer, mBufferInfo);
+                    if (mDataCollecter != null) {
+                        outputBuffer.position(mBufferInfo.offset + 4);
+                        outputBuffer.limit(mBufferInfo.offset + mBufferInfo.size);
+                        sendRealData(mBufferInfo.presentationTimeUs / 1000 - startTime, outputBuffer);
+                    }
+
                     Log.i(TAG, "sent " + mBufferInfo.size + " bytes to muxer...");
                 } else {
                     Log.d(TAG, "info.size == 0, drop it.");
@@ -136,12 +161,60 @@ public class ScreenRecordWorker implements Runnable {
         }
     }
 
+    private void sendAVCDecoderConfigurationRecord(long tms, MediaFormat format) {
+        byte[] AVCDecoderConfigurationRecord = Packager.H264Packager.generateAVCDecoderConfigurationRecord(format);
+        int packetLen = Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
+                AVCDecoderConfigurationRecord.length;
+        byte[] finalBuff = new byte[packetLen];
+        Packager.FLVPackager.fillFlvVideoTag(finalBuff,
+                0,
+                true,
+                true,
+                AVCDecoderConfigurationRecord.length);
+        System.arraycopy(AVCDecoderConfigurationRecord, 0,
+                finalBuff, Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH, AVCDecoderConfigurationRecord.length);
+        RESFlvData resFlvData = new RESFlvData();
+        resFlvData.droppable = false;
+        resFlvData.byteBuffer = finalBuff;
+        resFlvData.size = finalBuff.length;
+        resFlvData.dts = (int) tms;
+        resFlvData.flvTagType = RESFlvData.FLV_RTMP_PACKET_TYPE_VIDEO;
+        resFlvData.videoFrameType = RESFlvData.NALU_TYPE_IDR;
+        mDataCollecter.collect(resFlvData, RESRtmpSender.FROM_VIDEO);
+    }
+
+    private void sendRealData(long tms, ByteBuffer realData) {
+        int realDataLength = realData.remaining();
+        int packetLen = Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
+                Packager.FLVPackager.NALU_HEADER_LENGTH +
+                realDataLength;
+        byte[] finalBuff = new byte[packetLen];
+        realData.get(finalBuff, Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
+                        Packager.FLVPackager.NALU_HEADER_LENGTH,
+                realDataLength);
+        int frameType = finalBuff[Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
+                Packager.FLVPackager.NALU_HEADER_LENGTH] & 0x1F;
+        Packager.FLVPackager.fillFlvVideoTag(finalBuff,
+                0,
+                false,
+                frameType == 5,
+                realDataLength);
+        RESFlvData resFlvData = new RESFlvData();
+        resFlvData.droppable = true;
+        resFlvData.byteBuffer = finalBuff;
+        resFlvData.size = finalBuff.length;
+        resFlvData.dts = (int) tms;
+        resFlvData.flvTagType = RESFlvData.FLV_RTMP_PACKET_TYPE_VIDEO;
+        resFlvData.videoFrameType = frameType;
+        mDataCollecter.collect(resFlvData, RESRtmpSender.FROM_VIDEO);
+    }
+
     private Surface prepareEncoder() throws IOException {
         MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, mWidth, mHeight);
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
         format.setInteger(MediaFormat.KEY_BIT_RATE, mBitRate);
-        format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
+        format.setInteger(MediaFormat.KEY_FRAME_RATE, mFrameRate);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, IFRAME_INTERVAL);
 
         Log.d(TAG, "created video format: " + format);

@@ -8,6 +8,7 @@ import android.util.Log;
 
 import com.codyy.pushscreen.media.RESByteSpeedometer;
 import com.codyy.pushscreen.media.RESCoreParameters;
+import com.codyy.pushscreen.media.RESFlvData;
 import com.codyy.pushscreen.media.RESFrameRateMeter;
 
 /**

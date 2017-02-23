@@ -41,7 +41,7 @@ public class RESCoreParameters {
     public int previewColorFormat;
     public int previewBufferSize;
     public int mediacodecAVCColorFormat;
-    public int mediacdoecAVCBitRate;
+    public int mediacodecAVCBitRate;
     public int videoBufferQueueNum;
     public int audioBufferQueueNum;
     public int audioRecoderFormat;
@@ -75,7 +75,7 @@ public class RESCoreParameters {
         videoFPS=-1;
         previewColorFormat = -1;
         mediacodecAVCColorFormat = -1;
-        mediacdoecAVCBitRate = -1;
+        mediacodecAVCBitRate = -1;
         videoBufferQueueNum = -1;
         audioBufferQueueNum = -1;
         mediacodecAVCFrameRate = -1;
