@@ -3,6 +3,7 @@ package com.codyy.pushscreen;
 import android.media.AudioRecord;
 import android.media.MediaCodec;
 import android.media.MediaFormat;
+import android.support.annotation.NonNull;
 import android.util.Log;
 
 import com.codyy.pushscreen.media.Packager;
@@ -12,7 +13,6 @@ import com.codyy.pushscreen.media.RESFlvDataCollecter;
 import com.codyy.pushscreen.rtmp.RESRtmpSender;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 音频录制器
@@ -35,6 +35,8 @@ public class AudioRecordWorker implements Runnable {
     private volatile boolean mQuit = false;
 
     private long mStartTime;
+
+    private long mStartInputTime;
 
     private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
 
@@ -63,19 +65,87 @@ public class AudioRecordWorker implements Runnable {
         }
         mAudioEncoder.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         mAudioEncoder.start();
-        new AudioThread().start();
+//        new AudioThread().start();
     }
 
     @Override
     public void run() {
         initCodec();
-        while (!mQuit) {
-            int outputBufferId = mAudioEncoder.dequeueOutputBuffer(mBufferInfo, TIMEOUT_USEC);
-            if (outputBufferId >=0) {
+        sampleAndEncode();
+//        while (!mQuit) {
+//            int outputBufferId = mAudioEncoder.dequeueOutputBuffer(mBufferInfo, TIMEOUT_USEC);
+//            if (outputBufferId >=0) {
+//                if (mStartTime == 0) {
+//                    mStartTime = mBufferInfo.presentationTimeUs / 1000;
+//                }
+//                ByteBuffer outputBuffer = mAudioEncoder.getOutputBuffer(outputBufferId);
+//                Log.d(TAG, "got buffer, info: size=" + mBufferInfo.size
+//                        + ", presentationTimeUs=" + mBufferInfo.presentationTimeUs
+//                        + ", offset=" + mBufferInfo.offset);
+//                if (mBufferInfo.flags != MediaCodec.BUFFER_FLAG_CODEC_CONFIG
+//                        && mBufferInfo.size != 0) {
+//                    sendRealData((mBufferInfo.presentationTimeUs / 1000) - mStartTime, outputBuffer);
+//                }
+//                mAudioEncoder.releaseOutputBuffer(outputBufferId, false);
+//            } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+//                Log.d(TAG, "AudioSenderThread,MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:" +
+//                        mAudioEncoder.getOutputFormat().toString());
+////                MediaFormat outputFormat = mAudioEncoder.getOutputFormat();
+//                ByteBuffer csd0 = mAudioEncoder.getOutputFormat().getByteBuffer("csd-0");
+//                sendAudioSpecificConfig(0, csd0);
+//            } else if (outputBufferId == MediaCodec.INFO_TRY_AGAIN_LATER) {
+//                try {
+//                    TimeUnit.MICROSECONDS.sleep(10);
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+//            }
+//        }
+        release();
+    }
+
+    private void sampleAndEncode() {
+        AudioRecord audioRecord = createAudioRecord();
+        if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED)
+            audioRecord = null;
+        if (audioRecord != null) {
+            Log.v(TAG, "AudioThread:readyStart audio recording");
+            int bufferSize = mCoreParameters.audioRecoderBufferSize;
+            int readBytes;
+            audioRecord.startRecording();
+            byte[] pcmBuffer = new byte[bufferSize];
+            mStartInputTime = System.nanoTime() / 1000;
+            for (; !mQuit ;) {
+                readBytes = audioRecord.read(pcmBuffer, 0, bufferSize);
+                if (readBytes > 0) {
+                    // set audio data to encoder
+                    long pts = System.nanoTime()/1000 - mStartInputTime;
+                    encodeAudio(pcmBuffer, readBytes, pts);
+                }
+            }
+            audioRecord.stop();
+            audioRecord.release();
+        } else {
+            Log.e(TAG, "failed to initialize AudioRecord");
+        }
+        Log.v(TAG, "AudioThread:finished");
+    }
+
+    private void encodeAudio(byte[] buffer, int length, long pts) {
+        int inputBufferId = mAudioEncoder.dequeueInputBuffer(-1);
+        if (inputBufferId >= 0) {
+            Log.d(TAG, "butBuffer length=" + length + ",pts=" + pts);
+            ByteBuffer inputBuffer = mAudioEncoder.getInputBuffer(inputBufferId);
+            inputBuffer.put(buffer, 0, length);
+            mAudioEncoder.queueInputBuffer(inputBufferId, 0, length, pts, 0);
+        }
+        for (;;) {
+            int outBufferIndex = mAudioEncoder.dequeueOutputBuffer(mBufferInfo, 0);
+            if (outBufferIndex >=0) {
                 if (mStartTime == 0) {
                     mStartTime = mBufferInfo.presentationTimeUs / 1000;
                 }
-                ByteBuffer outputBuffer = mAudioEncoder.getOutputBuffer(outputBufferId);
+                ByteBuffer outputBuffer = mAudioEncoder.getOutputBuffer(outBufferIndex);
                 Log.d(TAG, "got buffer, info: size=" + mBufferInfo.size
                         + ", presentationTimeUs=" + mBufferInfo.presentationTimeUs
                         + ", offset=" + mBufferInfo.offset);
@@ -83,22 +153,16 @@ public class AudioRecordWorker implements Runnable {
                         && mBufferInfo.size != 0) {
                     sendRealData((mBufferInfo.presentationTimeUs / 1000) - mStartTime, outputBuffer);
                 }
-                mAudioEncoder.releaseOutputBuffer(outputBufferId, false);
-            } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                mAudioEncoder.releaseOutputBuffer(outBufferIndex, false);
+            } else if (outBufferIndex == MediaCodec.BUFFER_FLAG_CODEC_CONFIG){
                 Log.d(TAG, "AudioSenderThread,MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:" +
                         mAudioEncoder.getOutputFormat().toString());
-//                MediaFormat outputFormat = mAudioEncoder.getOutputFormat();
                 ByteBuffer csd0 = mAudioEncoder.getOutputFormat().getByteBuffer("csd-0");
                 sendAudioSpecificConfig(0, csd0);
-            } else if (outputBufferId == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                try {
-                    TimeUnit.MICROSECONDS.sleep(10);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+            } else {
+                break;
             }
         }
-        release();
     }
 
     private void release() {
@@ -156,63 +220,50 @@ public class AudioRecordWorker implements Runnable {
         @Override
         public void run() {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
-            try {
-                final int minBufferSize = AudioRecord.getMinBufferSize(
-                        mCoreParameters.audioRecoderSampleRate,
-                        mCoreParameters.audioRecoderChannelConfig,
-                        mCoreParameters.audioRecoderFormat);
-//                int buffer_size = SAMPLES_PER_FRAME * FRAMES_PER_BUFFER;
-//                if (buffer_size < minBufferSize)
-//                    buffer_size = ((minBufferSize / SAMPLES_PER_FRAME) + 1) * SAMPLES_PER_FRAME * 2;
-
-                AudioRecord audioRecord = null;
-                    try {
-                        audioRecord = new AudioRecord(
-                                mCoreParameters.audioRecoderSource,
-                                mCoreParameters.audioRecoderSampleRate,
-                                mCoreParameters.audioRecoderChannelConfig,
-                                mCoreParameters.audioRecoderFormat,
-                                minBufferSize * 5);
-                        if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED)
-                            audioRecord = null;
-                    } catch (final Exception e) {
-                        audioRecord = null;
+            AudioRecord audioRecord = createAudioRecord();
+            if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED)
+                audioRecord = null;
+            if (audioRecord != null) {
+                Log.v(TAG, "AudioThread:readyStart audio recording");
+                int bufferSize = mCoreParameters.audioRecoderBufferSize;
+                ByteBuffer buf = ByteBuffer.allocateDirect(bufferSize);
+                int readBytes;
+                audioRecord.startRecording();
+                mStartInputTime = System.nanoTime() / 1000;
+                for (; !mQuit ;) {
+                    // read audio data from internal mic
+                    buf.clear();
+                    readBytes = audioRecord.read(buf, bufferSize);
+                    if (readBytes > 0) {
+                        // set audio data to encoder
+                        buf.position(readBytes);
+                        buf.flip();
+                        long pts = System.nanoTime()/1000 - mStartInputTime;
+                        encode(buf, readBytes, pts);
                     }
-                if (audioRecord != null) {
-                    try {
-                        if (!mQuit) {
-                            Log.v(TAG, "AudioThread:readyStart audio recording");
-                            int bufferSize = mCoreParameters.audioRecoderBufferSize;
-                            ByteBuffer buf = ByteBuffer.allocateDirect(bufferSize);
-                            int readBytes;
-                            audioRecord.startRecording();
-                            try {
-                                for (; !mQuit ;) {
-                                    // read audio data from internal mic
-                                    buf.clear();
-                                    readBytes = audioRecord.read(buf, bufferSize);
-                                    if (readBytes > 0) {
-                                        // set audio data to encoder
-                                        buf.position(readBytes);
-                                        buf.flip();
-                                        encode(buf, readBytes, getPTSUs());
-                                    }
-                                }
-                            } finally {
-                                audioRecord.stop();
-                            }
-                        }
-                    } finally {
-                        audioRecord.release();
-                    }
-                } else {
-                    Log.e(TAG, "failed to initialize AudioRecord");
                 }
-            } catch (final Exception e) {
-                Log.e(TAG, "AudioThread#run", e);
+                audioRecord.stop();
+                audioRecord.release();
+            } else {
+                Log.e(TAG, "failed to initialize AudioRecord");
             }
             Log.v(TAG, "AudioThread:finished");
         }
+    }
+
+    @NonNull
+    private AudioRecord createAudioRecord() {
+        int minBufferSize = AudioRecord.getMinBufferSize(
+                mCoreParameters.audioRecoderSampleRate,
+                mCoreParameters.audioRecoderChannelConfig,
+                mCoreParameters.audioRecoderFormat);
+
+        return new AudioRecord(
+                mCoreParameters.audioRecoderSource,
+                mCoreParameters.audioRecoderSampleRate,
+                mCoreParameters.audioRecoderChannelConfig,
+                mCoreParameters.audioRecoderFormat,
+                minBufferSize * 5);
     }
 
     /**
@@ -224,7 +275,7 @@ public class AudioRecordWorker implements Runnable {
     protected void encode(ByteBuffer buffer, final int length, final long presentationTimeUs) {
         if (mQuit) return;
         while (!mQuit) {
-            int inputBufferIndex = mAudioEncoder.dequeueInputBuffer(TIMEOUT_USEC);
+            int inputBufferIndex = mAudioEncoder.dequeueInputBuffer(0);
             if (inputBufferIndex >= 0) {
                 ByteBuffer inputBuffer = mAudioEncoder.getInputBuffer(inputBufferIndex);
                 inputBuffer.clear();
@@ -248,22 +299,5 @@ public class AudioRecordWorker implements Runnable {
                 // will wait for maximum TIMEOUT_USEC(10msec) on each call
             }
         }
-    }
-
-    /**
-     * previous presentationTimeUs for writing
-     */
-    private long prevOutputPTSUs = 0;
-    /**
-     * get next encoding presentationTimeUs
-     * @return
-     */
-    protected long getPTSUs() {
-        long result = System.nanoTime() / 1000L;
-        // presentationTimeUs should be monotonic
-        // otherwise muxer fail to write
-        if (result < prevOutputPTSUs)
-            result = (prevOutputPTSUs - result) + result;
-        return result;
     }
 }

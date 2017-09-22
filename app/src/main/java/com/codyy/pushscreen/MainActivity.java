@@ -157,6 +157,9 @@ public class MainActivity extends AppCompatActivity {
             unbindService(mConn);
             mBound = false;
         }
+        if (mCaptureService != null && !mCaptureService.isRecording()) {
+            stopService(new Intent(this, CaptureService.class));
+        }
     }
 
     @Override

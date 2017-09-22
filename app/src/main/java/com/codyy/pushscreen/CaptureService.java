@@ -36,10 +36,6 @@ public class CaptureService extends Service {
 
     private MediaProjection mMediaProjection;
 
-    private int mScreenWidth;
-
-    private int mScreenHeight;
-
     private int mDensity;
 
     private boolean mRecording;
@@ -90,7 +86,7 @@ public class CaptureService extends Service {
         mRtmpParams.audioRecoderSampleRate = mRtmpParams.mediacodecAACSampleRate;
         mRtmpParams.audioRecoderFormat = AudioFormat.ENCODING_PCM_16BIT;
         mRtmpParams.audioRecoderSliceSize = mRtmpParams.mediacodecAACSampleRate / 10;
-        mRtmpParams.audioRecoderBufferSize = mRtmpParams.audioRecoderSliceSize * 2;
+        mRtmpParams.audioRecoderBufferSize = mRtmpParams.audioRecoderSliceSize;
 
         mMediaProjectionManager = (MediaProjectionManager)
                 getSystemService(Context.MEDIA_PROJECTION_SERVICE);
@@ -158,7 +154,6 @@ public class CaptureService extends Service {
         mRecording = false;
         mScreenRecordWorker.quit();
         mAudioRecordWorker.quit();
-//        mMediaMuxerWorker.stop();
         destroyMediaProjection();
         if (mRtmpSender != null) {
             mRtmpSender.stop();
